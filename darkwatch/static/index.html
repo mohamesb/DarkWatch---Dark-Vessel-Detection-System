@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>DARKWATCH — AIS Dark Vessel Monitor</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;600;700&family=Outfit:wght@300;400;500;600;700&display=swap');
+
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --bg:#060a10;--surface:#0c1018;--surface2:#111822;--surface3:#171f2c;
+    --border:#1c2536;--border-hi:#2a3650;
+    --text:#c8cdd8;--text-hi:#e8ecf4;--text-dim:#4a5568;--text-muted:#2d3748;
+    --cyan:#00e5ff;--cyan-dim:#00e5ff44;--cyan-glow:#00e5ff18;
+    --red:#ff3b5c;--red-dim:#ff3b5c55;--red-glow:#ff3b5c15;
+    --amber:#ffb020;--amber-dim:#ffb02055;
+    --green:#00e676;--green-dim:#00e67644;
+    --ghost:#ff6b35;--ghost-dim:#ff6b3544;
+    --purple:#b388ff;
+  }
+  html,body{height:100%;font-family:'Outfit',system-ui,sans-serif;background:var(--bg);color:var(--text);overflow:hidden}
+
+  /* ═══ SCANLINE OVERLAY ═══ */
+  body::after{
+    content:'';position:fixed;inset:0;z-index:9999;pointer-events:none;
+    background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,229,255,.008) 2px,rgba(0,229,255,.008) 4px);
+    mix-blend-mode:screen;
+  }
+
+  /* ═══ MAP ═══ */
+  #map{position:absolute;inset:0;z-index:1}
+
+  /* ═══ TOP BAR ═══ */
+  #topbar{
+    position:absolute;top:0;left:0;right:0;z-index:850;height:46px;
+    background:var(--surface);display:flex;align-items:center;
+    padding:0 18px;gap:14px;border-bottom:1px solid var(--border);
+  }
+  .logo{
+    font-family:'JetBrains Mono',monospace;font-size:13px;font-weight:700;
+    color:var(--cyan);letter-spacing:3px;display:flex;align-items:center;gap:8px;
+  }
+  .pulse-dot{
+    width:7px;height:7px;border-radius:50%;background:var(--cyan);position:relative;
+  }
+  .pulse-dot::after{
+    content:'';position:absolute;inset:-4px;border-radius:50%;
+    border:1px solid var(--cyan);opacity:0;
+    animation:ping 2s cubic-bezier(0,0,.2,1) infinite;
+  }
+  @keyframes ping{0%{transform:scale(.8);opacity:.8}100%{transform:scale(2.2);opacity:0}}
+  .sep{width:1px;height:22px;background:var(--border)}
+  .stat{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--text-dim)}
+  .stat b{font-weight:600}
+  .stat-cy b{color:var(--cyan)}
+  .stat-gn b{color:var(--green)}
+  .stat-rd b{color:var(--red)}
+
+  /* Mode buttons */
+  .modes{margin-left:auto;display:flex;gap:2px;background:var(--surface2);border-radius:6px;padding:2px;border:1px solid var(--border)}
+  .mode-btn{
+    font-family:'JetBrains Mono',monospace;font-size:10px;letter-spacing:.4px;
+    padding:5px 12px;border-radius:4px;cursor:pointer;
+    color:var(--text-dim);background:transparent;border:none;transition:all .2s;
+  }
+  .mode-btn.active{background:var(--surface3);color:var(--cyan)}
+  .mode-btn:hover:not(.active){color:var(--text)}
+
+  /* ═══ LEFT PANEL ═══ */
+  #panel{
+    position:absolute;top:46px;left:0;bottom:28px;width:320px;z-index:800;
+    background:var(--surface);border-right:1px solid var(--border);
+    display:flex;flex-direction:column;
+    transition:transform .35s cubic-bezier(.16,1,.3,1);
+  }
+  #panel.collapsed{transform:translateX(-320px)}
+  #panel-toggle{
+    position:absolute;top:56px;z-index:900;width:28px;height:50px;
+    border:1px solid var(--border);border-left:none;
+    background:var(--surface);color:var(--text-dim);
+    border-radius:0 6px 6px 0;cursor:pointer;font-size:11px;
+    display:flex;align-items:center;justify-content:center;
+    transition:left .35s cubic-bezier(.16,1,.3,1),color .2s;left:320px;
+  }
+  #panel-toggle:hover{color:var(--cyan)}
+
+  /* Panel sections */
+  .psec{padding:12px 16px;border-bottom:1px solid var(--border)}
+  .psec-title{
+    font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:1.5px;
+    text-transform:uppercase;color:var(--text-dim);margin-bottom:8px;
+    display:flex;align-items:center;gap:6px;
+  }
+  .psec-title::before{content:'';width:3px;height:3px;background:var(--cyan);border-radius:50%}
+
+  /* Filter chips */
+  .chips{display:flex;flex-wrap:wrap;gap:4px}
+  .chip{
+    font-family:'JetBrains Mono',monospace;font-size:10px;
+    padding:4px 8px;border-radius:4px;cursor:pointer;
+    border:1px solid var(--border);background:transparent;color:var(--text-dim);
+    transition:all .15s;display:flex;align-items:center;gap:5px;
+  }
+  .chip.on{border-color:var(--cyan);color:var(--cyan);background:var(--cyan-glow)}
+  .chip:hover{border-color:var(--border-hi);color:var(--text)}
+  .cdot{width:6px;height:6px;border-radius:50%}
+
+  /* Threshold slider */
+  .slider-row{display:flex;align-items:center;gap:8px}
+  .slider-row input[type=range]{flex:1;accent-color:var(--cyan);height:3px}
+  .slider-val{font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--cyan);min-width:40px;text-align:right}
+
+  /* Vessel list */
+  #vlist{flex:1;overflow-y:auto}
+  #vlist::-webkit-scrollbar{width:3px}
+  #vlist::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+  .vitem{
+    padding:10px 16px;border-bottom:1px solid var(--border);cursor:pointer;
+    transition:background .12s;display:flex;align-items:center;gap:10px;
+  }
+  .vitem:hover{background:var(--surface2)}
+  .vitem.sel{background:var(--surface3);border-left:2px solid var(--cyan)}
+  .vitem.dark{border-left:2px solid var(--red)}
+  .vitem.dark.sel{border-left:2px solid var(--red)}
+  .vi-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+  .vi-body{flex:1;min-width:0}
+  .vi-name{font-size:12px;font-weight:600;color:var(--text-hi);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .vi-meta{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text-dim);margin-top:1px}
+  .badge{
+    font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:.5px;
+    padding:2px 6px;border-radius:3px;flex-shrink:0;text-transform:uppercase;font-weight:600;
+  }
+  .badge-dk{background:var(--red-glow);color:var(--red);border:1px solid var(--red-dim)}
+  .badge-ok{color:var(--green);opacity:.6;font-size:9px}
+
+  /* Search */
+  .search-box{
+    width:100%;padding:7px 10px;border:1px solid var(--border);border-radius:5px;
+    background:var(--surface2);color:var(--text);font-size:12px;
+    font-family:'Outfit',sans-serif;outline:none;transition:border-color .2s;
+  }
+  .search-box:focus{border-color:var(--cyan)}
+  .search-box::placeholder{color:var(--text-muted)}
+
+  /* ═══ DETAIL PANEL (right side) ═══ */
+  #detail{
+    position:absolute;top:46px;right:0;bottom:28px;width:360px;z-index:800;
+    background:var(--surface);border-left:1px solid var(--border);
+    transform:translateX(360px);transition:transform .35s cubic-bezier(.16,1,.3,1);
+    display:flex;flex-direction:column;overflow-y:auto;
+  }
+  #detail.open{transform:translateX(0)}
+  #detail::-webkit-scrollbar{width:3px}
+  #detail::-webkit-scrollbar-thumb{background:var(--border);border-radius:2px}
+
+  .dh{padding:16px 18px;border-bottom:1px solid var(--border);display:flex;align-items:flex-start;justify-content:space-between}
+  .dh-name{font-size:17px;font-weight:700;color:var(--text-hi)}
+  .dh-type{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--cyan);letter-spacing:.5px;margin-top:3px}
+  .dh-close{
+    width:30px;height:30px;border:1px solid var(--border);border-radius:5px;
+    background:transparent;color:var(--text-dim);cursor:pointer;font-size:16px;
+    display:flex;align-items:center;justify-content:center;transition:all .12s;flex-shrink:0;
+  }
+  .dh-close:hover{color:var(--red);border-color:var(--red-dim)}
+
+  .dgrid{display:grid;grid-template-columns:1fr 1fr;gap:1px;background:var(--border);border-bottom:1px solid var(--border)}
+  .dcell{background:var(--surface);padding:10px 14px}
+  .dcell label{display:block;font-family:'JetBrains Mono',monospace;font-size:8px;letter-spacing:1px;color:var(--text-dim);text-transform:uppercase;margin-bottom:3px}
+  .dcell span{font-size:13px;font-weight:500;color:var(--text-hi)}
+  .dcell.full{grid-column:1/-1}
+
+  .dark-alert{
+    margin:14px 18px;padding:10px 14px;border-radius:6px;
+    background:var(--red-glow);border:1px solid var(--red-dim);
+    font-size:11px;color:var(--red);display:flex;align-items:center;gap:8px;
+    font-family:'JetBrains Mono',monospace;letter-spacing:.3px;
+  }
+  .blink{animation:blink 1s step-end infinite}
+  @keyframes blink{50%{opacity:0}}
+
+  /* Predict button */
+  .btn-pred{
+    margin:14px 18px;padding:10px;border:1px solid var(--ghost);background:transparent;
+    color:var(--ghost);border-radius:6px;cursor:pointer;font-size:11px;
+    font-family:'JetBrains Mono',monospace;letter-spacing:.5px;transition:all .2s;
+    display:flex;align-items:center;justify-content:center;gap:6px;
+  }
+  .btn-pred:hover{background:var(--ghost);color:#fff}
+  .btn-pred.loading{opacity:.5;pointer-events:none}
+  .pred-list{padding:4px 18px 18px}
+  .pred-row{
+    font-family:'JetBrains Mono',monospace;font-size:10px;
+    padding:5px 0;color:var(--ghost);display:flex;justify-content:space-between;
+    border-bottom:1px solid var(--border);
+  }
+  .pred-row .step{color:var(--text-dim)}
+
+  /* Section divider inside detail */
+  .dsec{
+    font-family:'JetBrains Mono',monospace;font-size:9px;letter-spacing:1.2px;
+    color:var(--text-dim);text-transform:uppercase;padding:12px 18px 6px;
+    border-top:1px solid var(--border);margin-top:4px;
+  }
+
+  /* ═══ BOTTOM STATUS BAR ═══ */
+  #statusbar{
+    position:absolute;bottom:0;left:0;right:0;z-index:800;height:28px;
+    background:var(--surface);border-top:1px solid var(--border);
+    display:flex;align-items:center;padding:0 14px;gap:14px;
+    font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--text-dim);
+  }
+  .ind{width:5px;height:5px;border-radius:50%;background:var(--green)}
+  .ind.err{background:var(--red)}
+  .ssep{width:1px;height:14px;background:var(--border)}
+
+  /* ═══ LEAFLET DARK OVERRIDES ═══ */
+  .leaflet-control-zoom a{
+    background:var(--surface)!important;color:var(--text-dim)!important;
+    border-color:var(--border)!important;width:28px!important;height:28px!important;
+    line-height:28px!important;font-size:14px!important;
+  }
+  .leaflet-control-zoom a:hover{color:var(--cyan)!important;background:var(--surface2)!important}
+  .leaflet-control-zoom{border:1px solid var(--border)!important;border-radius:6px!important;overflow:hidden}
+  .leaflet-control-attribution{display:none!important}
+
+  .dark-tooltip{
+    background:var(--surface2)!important;color:var(--text)!important;
+    border:1px solid var(--border)!important;border-radius:4px!important;
+    font-family:'JetBrains Mono',monospace!important;font-size:10px!important;
+    padding:4px 8px!important;box-shadow:0 4px 20px rgba(0,0,0,.6)!important;
+  }
+  .dark-tooltip::before{border-top-color:var(--border)!important}
+
+  /* ═══ LOADING OVERLAY ═══ */
+  #loading{
+    position:fixed;inset:0;z-index:10000;background:var(--bg);
+    display:flex;flex-direction:column;align-items:center;justify-content:center;
+    transition:opacity .5s ease;
+  }
+  #loading.done{opacity:0;pointer-events:none}
+  .ld-ring{width:44px;height:44px;border:2px solid var(--border);border-top-color:var(--cyan);border-radius:50%;animation:spin .9s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .ld-text{font-family:'JetBrains Mono',monospace;font-size:11px;letter-spacing:2px;color:var(--cyan);margin-top:14px;text-transform:uppercase}
+  .ld-sub{font-size:10px;color:var(--text-dim);margin-top:4px;font-family:'JetBrains Mono',monospace}
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="ld-ring"></div>
+  <div class="ld-text">Acquiring AIS Feed</div>
+  <div class="ld-sub">Connecting to Digitraffic Marine API…</div>
+</div>
+
+<!-- ═══ TOP BAR ═══ -->
+<div id="topbar">
+  <div class="logo"><span class="pulse-dot"></span>DARKWATCH</div>
+  <div class="sep"></div>
+  <div class="stat stat-cy">Tracked: <b id="s-total">—</b></div>
+  <div class="stat stat-gn">Active: <b id="s-active">—</b></div>
+  <div class="stat stat-rd">Dark: <b id="s-dark">—</b></div>
+  <div class="sep"></div>
+  <div class="stat">Cycle: <b id="s-cycle">0</b></div>
+  <div class="stat">Updated: <b id="s-time">—</b></div>
+  <div class="modes">
+    <button class="mode-btn active" data-mode="all">ALL</button>
+    <button class="mode-btn" data-mode="dark">DARK ONLY</button>
+    <button class="mode-btn" data-mode="moving">UNDERWAY</button>
+  </div>
+</div>
+
+<!-- ═══ LEFT PANEL ═══ -->
+<button id="panel-toggle" onclick="togglePanel()">◀</button>
+<div id="panel">
+  <div class="psec">
+    <div class="psec-title">Search</div>
+    <input type="text" class="search-box" id="search" placeholder="Filter by name or MMSI…" oninput="renderList()">
+  </div>
+  <div class="psec">
+    <div class="psec-title">Vessel Types</div>
+    <div class="chips" id="type-chips">
+      <button class="chip on" data-cat="tanker"><span class="cdot" style="background:#ef4444"></span>Tanker</button>
+      <button class="chip on" data-cat="cargo"><span class="cdot" style="background:var(--cyan)"></span>Cargo</button>
+      <button class="chip on" data-cat="passenger"><span class="cdot" style="background:#10b981"></span>Passenger</button>
+      <button class="chip on" data-cat="fishing"><span class="cdot" style="background:var(--amber)"></span>Fishing</button>
+      <button class="chip on" data-cat="other"><span class="cdot" style="background:#6b7280"></span>Other</button>
+    </div>
+  </div>
+  <div class="psec">
+    <div class="psec-title">Silence Threshold</div>
+    <div class="slider-row">
+      <input type="range" id="thresh" min="5" max="60" value="15"
+             oninput="silenceMin=+this.value;document.getElementById('tval').textContent=this.value+'m';fetchAndRender()">
+      <span class="slider-val" id="tval">15m</span>
+    </div>
+  </div>
+  <div class="psec" style="padding-bottom:6px">
+    <div class="psec-title">Vessel List</div>
+  </div>
+  <div id="vlist"></div>
+</div>
+
+<!-- ═══ DETAIL PANEL ═══ -->
+<div id="detail"><div id="dcontent"></div></div>
+
+<!-- ═══ MAP ═══ -->
+<div id="map"></div>
+
+<!-- ═══ STATUS BAR ═══ -->
+<div id="statusbar">
+  <span class="ind" id="conn-ind"></span>
+  <span id="conn-text">Connecting…</span>
+  <span class="ssep"></span>
+  <span>Source: meri.digitraffic.fi</span>
+  <span class="ssep"></span>
+  <span>Region: Baltic / Gulf of Finland</span>
+  <span class="ssep"></span>
+  <span id="fetch-info">—</span>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ╔══════════════════════════════════════════════════════════════════════════╗
+// ║  DARKWATCH — Frontend Controller                                       ║
+// ║  Connects to Flask backend at /api/* for real-time vessel data         ║
+// ╚══════════════════════════════════════════════════════════════════════════╝
+
+// ═══════════ CONFIG ═══════════
+const REFRESH   = 10000;       // Poll backend every 10s
+const CENTER    = [59.95, 24.5];
+const ZOOM      = 7;
+
+let silenceMin  = 15;
+let displayMode = 'all';
+let typeFilters = {tanker:true,cargo:true,passenger:true,fishing:true,other:true};
+let vessels     = [];          // Latest full vessel list from backend
+let markers     = {};          // mmsi -> L.circleMarker
+let selected    = null;        // mmsi string
+let panelOpen   = true;
+let cycle       = 0;
+let trackLayer, predLayer;
+
+// Category colors
+const CAT_COL = {tanker:'#ef4444',cargo:'#00e5ff',passenger:'#10b981',fishing:'#ffb020',tug:'#b388ff',other:'#6b7280'};
+const CAT_LBL = {tanker:'Tanker',cargo:'Cargo',passenger:'Passenger',fishing:'Fishing',tug:'Tug',other:'Vessel'};
+
+// ═══════════ MAP ═══════════
+const map = L.map('map',{center:CENTER,zoom:ZOOM,zoomControl:true,preferCanvas:true});
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{
+  maxZoom:19, subdomains:'abcd',
+}).addTo(map);
+trackLayer = L.layerGroup().addTo(map);
+predLayer  = L.layerGroup().addTo(map);
+
+// Load ports
+fetch('/api/ports').then(r=>r.json()).then(ports=>{
+  ports.forEach(p=>{
+    L.circleMarker([p.lat,p.lon],{radius:5,color:'#3b82f6',fillColor:'#3b82f644',fillOpacity:.4,weight:1})
+     .bindTooltip(p.name,{direction:'top',offset:[0,-6],className:'dark-tooltip'})
+     .addTo(map);
+  });
+}).catch(()=>{});
+
+
+// ═══════════ DATA FETCH ═══════════
+async function fetchAndRender(){
+  const t0 = performance.now();
+  try{
+    const url = `/api/vessels?silence=${silenceMin}`;
+    const res = await fetch(url);
+    if(!res.ok) throw new Error(`HTTP ${res.status}`);
+    vessels = await res.json();
+    cycle++;
+
+    const darkCount = vessels.filter(v=>v.is_dark).length;
+    document.getElementById('s-total').textContent  = vessels.length;
+    document.getElementById('s-active').textContent = vessels.length - darkCount;
+    document.getElementById('s-dark').textContent   = darkCount;
+    document.getElementById('s-cycle').textContent  = cycle;
+    document.getElementById('s-time').textContent   = new Date().toLocaleTimeString();
+    document.getElementById('conn-ind').className   = 'ind';
+    document.getElementById('conn-text').textContent= 'Connected';
+    document.getElementById('fetch-info').textContent = `${vessels.length} vessels · ${Math.round(performance.now()-t0)}ms`;
+
+    renderMarkers();
+    renderList();
+
+    if(cycle===1){
+      const ld = document.getElementById('loading');
+      ld.classList.add('done');
+      setTimeout(()=>ld.remove(),600);
+    }
+  }catch(e){
+    console.error('Fetch failed:',e);
+    document.getElementById('conn-ind').className = 'ind err';
+    document.getElementById('conn-text').textContent = 'Error — retrying…';
+  }
+}
+
+// ═══════════ FILTER LOGIC ═══════════
+function shouldShow(v){
+  if(!typeFilters[v.category]) return false;
+  if(displayMode==='dark')   return v.is_dark;
+  if(displayMode==='moving') return v.sog >= 1;
+  return true;
+}
+
+// ═══════════ MAP MARKERS ═══════════
+function renderMarkers(){
+  const vis = new Set();
+  vessels.forEach(v=>{
+    if(!shouldShow(v)) return;
+    vis.add(v.mmsi);
+
+    const isDark  = v.is_dark;
+    const isSel   = v.mmsi === selected;
+    const col     = isDark ? '#ff3b5c' : (isSel ? '#ffb020' : (CAT_COL[v.category]||'#6b7280'));
+    const radius  = isDark ? 6 : (isSel ? 6 : 3.5);
+    const opacity = isDark ? .9 : .7;
+    const weight  = isDark ? 2 : 1.5;
+
+    if(markers[v.mmsi]){
+      const m = markers[v.mmsi];
+      // Animate position smoothly
+      const cur = m.getLatLng();
+      const dlat = v.lat - cur.lat, dlon = v.lon - cur.lng;
+      if(Math.abs(dlat) > 1e-6 || Math.abs(dlon) > 1e-6){
+        animateMarker(m, cur, {lat:v.lat,lng:v.lon}, 800);
+      }
+      m.setStyle({color:col,fillColor:col,radius,fillOpacity:opacity,weight});
+    } else {
+      const m = L.circleMarker([v.lat,v.lon],{radius,weight,color:col,fillColor:col,fillOpacity:opacity})
+                 .addTo(map);
+      m.bindTooltip(v.name,{direction:'top',offset:[0,-8],className:'dark-tooltip'});
+      m.on('click',()=>selectVessel(v.mmsi));
+      markers[v.mmsi] = m;
+    }
+  });
+
+  // Remove hidden markers
+  Object.keys(markers).forEach(mmsi=>{
+    if(!vis.has(mmsi)){markers[mmsi].remove();delete markers[mmsi]}
+  });
+}
+
+function animateMarker(marker, from, to, duration){
+  const start = performance.now();
+  function step(now){
+    const t = Math.min((now - start) / duration, 1);
+    const ease = t < .5 ? 2*t*t : -1+(4-2*t)*t; // ease in-out quad
+    const lat = from.lat + (to.lat - from.lat) * ease;
+    const lng = from.lng + (to.lng - from.lng) * ease;
+    marker.setLatLng([lat, lng]);
+    if(t < 1) requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
+}
+
+// ═══════════ VESSEL LIST ═══════════
+function renderList(){
+  const list = document.getElementById('vlist');
+  const query = (document.getElementById('search').value||'').toLowerCase();
+
+  let filtered = vessels.filter(shouldShow);
+  if(query){
+    filtered = filtered.filter(v=> v.name.toLowerCase().includes(query) || v.mmsi.includes(query));
+  }
+
+  // Sort: dark first, then by silence desc
+  filtered.sort((a,b)=>{
+    if(a.is_dark!==b.is_dark) return a.is_dark ? -1 : 1;
+    return b.silence_min - a.silence_min;
+  });
+
+  const limit = Math.min(filtered.length, 300);
+  let html = '';
+  for(let i=0;i<limit;i++){
+    const v = filtered[i];
+    const sel   = v.mmsi===selected?' sel':'';
+    const dark  = v.is_dark?' dark':'';
+    const col   = v.is_dark?'var(--red)':(CAT_COL[v.category]||'#6b7280');
+    const badge = v.is_dark
+      ? '<span class="badge badge-dk">⚠ DARK</span>'
+      : `<span class="badge badge-ok">${v.sog.toFixed(1)}kn</span>`;
+    html += `<div class="vitem${sel}${dark}" onclick="selectVessel('${v.mmsi}')">
+      <span class="vi-dot" style="background:${col}"></span>
+      <div class="vi-body">
+        <div class="vi-name">${v.name}</div>
+        <div class="vi-meta">${CAT_LBL[v.category]||'Vessel'} · ${v.silence_min.toFixed(0)}m silent · ${v.sog.toFixed(1)}kn</div>
+      </div>${badge}</div>`;
+  }
+  if(filtered.length>limit) html += `<div style="padding:10px 16px;font-size:11px;color:var(--text-dim)">+ ${filtered.length-limit} more…</div>`;
+  if(!filtered.length) html = '<div style="padding:20px 16px;text-align:center;color:var(--text-dim);font-size:12px">No vessels match current filters</div>';
+  list.innerHTML = html;
+}
+
+// ═══════════ VESSEL SELECTION ═══════════
+async function selectVessel(mmsi){
+  selected = mmsi;
+  trackLayer.clearLayers();
+  predLayer.clearLayers();
+
+  // Fetch full detail from backend
+  try{
+    const res = await fetch(`/api/vessel/${mmsi}`);
+    if(!res.ok) return;
+    const v = await res.json();
+
+    // Fly to vessel
+    map.flyTo([v.lat, v.lon], Math.max(map.getZoom(), 10), {duration:.7});
+
+    // Draw track history
+    if(v.track && v.track.length >= 2){
+      const ll = v.track.map(p=>[p.lat, p.lon]);
+      L.polyline(ll,{color:'#00e5ff',weight:2,opacity:.4,dashArray:'4 6'}).addTo(trackLayer);
+      // Small dots for each historical point
+      v.track.forEach(p=>{
+        L.circleMarker([p.lat,p.lon],{radius:2,color:'#00e5ff',fillColor:'#00e5ff',fillOpacity:.5,weight:0}).addTo(trackLayer);
+      });
+    }
+
+    // Build detail panel
+    const dc = document.getElementById('dcontent');
+    const darkHTML = v.is_dark ? `
+      <div class="dark-alert">
+        <span class="blink">⚠</span>
+        AIS SILENT ${v.silence_min.toFixed(0)} MIN — LAST SOG ${v.sog} KN — VESSEL MAY BE EVADING
+      </div>` : '';
+
+    // Helper for optional values
+    const f = (val, suffix='') => val != null && val !== '' ? val + suffix : '—';
+    const navText = v.nav_status_text || (v.nav_status != null ? `Code ${v.nav_status}` : '—');
+
+    dc.innerHTML = `
+      <div class="dh">
+        <div>
+          <div class="dh-name">${v.name||'Unknown'}</div>
+          <div class="dh-type">${CAT_LBL[v.category]||'Vessel'} · MMSI ${v.mmsi}</div>
+        </div>
+        <button class="dh-close" onclick="closeDetail()">✕</button>
+      </div>
+      ${darkHTML}
+
+      <div class="dsec">Identification</div>
+      <div class="dgrid">
+        <div class="dcell"><label>MMSI</label><span>${v.mmsi}</span></div>
+        <div class="dcell"><label>IMO</label><span>${f(v.imo)}</span></div>
+        <div class="dcell"><label>Call Sign</label><span>${f(v.call_sign)}</span></div>
+        <div class="dcell"><label>Ship Type</label><span>${v.ship_type||'—'} (${CAT_LBL[v.category]||'?'})</span></div>
+      </div>
+
+      <div class="dsec">Position & Motion</div>
+      <div class="dgrid">
+        <div class="dcell"><label>Latitude</label><span>${v.lat.toFixed(5)}</span></div>
+        <div class="dcell"><label>Longitude</label><span>${v.lon.toFixed(5)}</span></div>
+        <div class="dcell"><label>Speed (SOG)</label><span>${v.sog} kn</span></div>
+        <div class="dcell"><label>Course (COG)</label><span>${v.cog}°</span></div>
+        <div class="dcell"><label>Heading</label><span>${f(v.heading, '°')}</span></div>
+        <div class="dcell"><label>Rate of Turn</label><span>${f(v.rot, '°/min')}</span></div>
+        <div class="dcell full"><label>Nav Status</label><span>${navText}</span></div>
+      </div>
+
+      <div class="dsec">Dimensions & Draught</div>
+      <div class="dgrid">
+        <div class="dcell"><label>Length</label><span>${f(v.length, ' m')}</span></div>
+        <div class="dcell"><label>Beam</label><span>${f(v.beam, ' m')}</span></div>
+        <div class="dcell full"><label>Draught</label><span>${v.draught != null ? v.draught + ' m' : '—'}</span></div>
+      </div>
+
+      <div class="dsec">Voyage</div>
+      <div class="dgrid">
+        <div class="dcell full"><label>Destination</label><span style="color:var(--cyan)">${f(v.destination)}</span></div>
+        <div class="dcell"><label>ETA</label><span>${f(v.eta)}</span></div>
+        <div class="dcell"><label>Silent For</label><span style="color:${v.is_dark?'var(--red)':'var(--text-hi)'}">${v.silence_min.toFixed(1)} min</span></div>
+        <div class="dcell"><label>Track Points</label><span>${(v.track||[]).length}</span></div>
+        <div class="dcell"><label>Last AIS</label><span>${v.timestamp ? new Date(v.timestamp).toLocaleTimeString() : '—'}</span></div>
+      </div>
+
+      <div class="dsec">Ghost Trajectory Prediction</div>
+      <button class="btn-pred" id="btn-pred" onclick="runPrediction('${v.mmsi}')">
+        ◈ Compute Kalman Prediction (${PRED_STEPS} steps)
+      </button>
+      <div id="pred-out" class="pred-list"></div>
+    `;
+    document.getElementById('detail').classList.add('open');
+  }catch(e){console.error(e)}
+
+  renderMarkers();
+  renderList();
+}
+
+const PRED_STEPS = 10;
+
+async function runPrediction(mmsi){
+  const btn = document.getElementById('btn-pred');
+  btn.classList.add('loading');
+  btn.textContent = '◈ Computing…';
+  predLayer.clearLayers();
+
+  try{
+    const res = await fetch(`/api/predict/${mmsi}?steps=${PRED_STEPS}`);
+    const data = await res.json();
+    if(data.error){
+      document.getElementById('pred-out').innerHTML = `<div style="color:var(--red);font-size:11px;padding:4px 0">${data.error}</div>`;
+      return;
+    }
+    const preds = data.predictions;
+
+    // Draw predicted path on map
+    const v = vessels.find(v=>v.mmsi===mmsi);
+    const start = v ? [v.lat,v.lon] : [preds[0].lat,preds[0].lon];
+    const line = [start, ...preds.map(p=>[p.lat,p.lon])];
+
+    L.polyline(line,{color:'#ff6b35',weight:2.5,dashArray:'8 5',opacity:.85}).addTo(predLayer);
+    preds.forEach((p,i)=>{
+      const r = i===preds.length-1 ? 6 : 3.5;
+      const fo = i===preds.length-1 ? .4 : .7;
+      L.circleMarker([p.lat,p.lon],{radius:r,color:'#ff6b35',fillColor:'#ff6b35',fillOpacity:fo,weight:i===preds.length-1?2:1})
+       .bindTooltip(`Step ${i+1}`,{direction:'top',className:'dark-tooltip'})
+       .addTo(predLayer);
+    });
+
+    // Render results
+    const out = document.getElementById('pred-out');
+    out.innerHTML = `<div style="font-family:'JetBrains Mono',monospace;font-size:9px;color:var(--text-dim);padding:4px 0 2px;letter-spacing:.5px">METHOD: ${data.method.toUpperCase()} · INTERVAL: ${data.interval_s}s</div>` +
+      preds.map((p,i)=>`<div class="pred-row"><span class="step">STEP ${i+1}</span><span>${p.lat.toFixed(5)}, ${p.lon.toFixed(5)}</span></div>`).join('');
+  }catch(e){
+    document.getElementById('pred-out').innerHTML = '<div style="color:var(--red);font-size:11px">Prediction failed</div>';
+  }finally{
+    btn.classList.remove('loading');
+    btn.innerHTML = `◈ Compute Kalman Prediction (${PRED_STEPS} steps)`;
+  }
+}
+
+function closeDetail(){
+  selected = null;
+  document.getElementById('detail').classList.remove('open');
+  trackLayer.clearLayers();
+  predLayer.clearLayers();
+  renderMarkers();
+  renderList();
+}
+
+// ═══════════ UI CONTROLS ═══════════
+function togglePanel(){
+  panelOpen = !panelOpen;
+  document.getElementById('panel').classList.toggle('collapsed',!panelOpen);
+  const t = document.getElementById('panel-toggle');
+  t.textContent = panelOpen ? '◀' : '▶';
+  t.style.left = panelOpen ? '320px' : '0';
+  setTimeout(()=>map.invalidateSize(),400);
+}
+
+// Mode buttons
+document.querySelectorAll('.mode-btn').forEach(btn=>{
+  btn.addEventListener('click',()=>{
+    document.querySelectorAll('.mode-btn').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    displayMode = btn.dataset.mode;
+    renderMarkers();
+    renderList();
+  });
+});
+
+// Type filter chips
+document.querySelectorAll('#type-chips .chip').forEach(chip=>{
+  chip.addEventListener('click',()=>{
+    const cat = chip.dataset.cat;
+    typeFilters[cat] = !typeFilters[cat];
+    chip.classList.toggle('on',typeFilters[cat]);
+    renderMarkers();
+    renderList();
+  });
+});
+
+// ═══════════ BOOT ═══════════
+fetchAndRender();
+setInterval(fetchAndRender, REFRESH);
+</script>
+</body>
+</html>
